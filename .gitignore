@@ -1,2 +1,2 @@
 .vscode/
-isaacgym/python/isaacgym/_bindings/linux-x86_64/libcarb.gym.plugin.so
+*.so
