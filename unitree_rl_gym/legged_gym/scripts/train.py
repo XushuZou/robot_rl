@@ -16,7 +16,8 @@ def train(args):
 if __name__ == '__main__':
     args = get_args()
     args.task = "g1"
-    args.num_envs = 160 # 4096 -- 7GB
+    args.num_envs = 1280 # 4096 -- 7GB
+    args.max_iterations = 50
     args.headless = True # False 开启显示 ;  True 关闭显示
     args.resume = False
     train(args)

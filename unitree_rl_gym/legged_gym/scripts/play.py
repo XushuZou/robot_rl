@@ -49,4 +49,5 @@ if __name__ == '__main__':
     MOVE_CAMERA = False
     args = get_args()
     args.task = "g1"
+    args.num_envs = 10 # 4096 -- 7GB
     play(args)
