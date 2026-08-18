@@ -5,7 +5,7 @@ from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
 import torch
 
-class G1Robot(LeggedRobot):
+class L3Robot(LeggedRobot):
     
     def _get_noise_scale_vec(self, cfg):
         """ Sets a vector used to scale the noise added to the observations.
@@ -119,5 +119,5 @@ class G1Robot(LeggedRobot):
         return torch.sum(penalize, dim=(1,2))
     
     def _reward_hip_pos(self):
-        return torch.sum(torch.square(self.dof_pos[:,[1,2,7,8]]), dim=1)
+        return torch.sum(torch.square(self.dof_pos[:,[0,1,6,7]]), dim=1) # roll(x方向),yaw(z方向).
     

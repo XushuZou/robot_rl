@@ -32,19 +32,20 @@ class LeggedRobot(BaseTask):
             device_id (int): 0, 1, ...
             headless (bool): Run without rendering if True
         """
-        self.cfg = cfg
-        self.sim_params = sim_params
-        self.height_samples = None
-        self.debug_viz = False
-        self.init_done = False
-        self._parse_cfg(self.cfg)
-        super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
+        self.cfg = cfg # 构造类
+        self.sim_params = sim_params # 仿真环境参数
+        self.height_samples = None # 存储了地面上每个网格点的高度信息，定义地面上的地形变化
+        self.debug_viz = False # 是否启用调试可视化
+        self.init_done = False # 初始化标志位
+        self._parse_cfg(self.cfg) # 解析配置文件
+        super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless) # 调用父类初始化，传递相应的参数
 
-        if not self.headless:
+
+        if not self.headless: # 设置相机的初始位置和朝向
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
-        self._init_buffers()
-        self._prepare_reward_function()
-        self.init_done = True
+        self._init_buffers() # 初始化 PyTorch 缓冲区
+        self._prepare_reward_function() # 初始化配置奖励函数
+        self.init_done = True # 初始化完成
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -53,23 +54,23 @@ class LeggedRobot(BaseTask):
             actions (torch.Tensor): Tensor of shape (num_envs, num_actions_per_env)
         """
 
-        clip_actions = self.cfg.normalization.clip_actions
-        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+        clip_actions = self.cfg.normalization.clip_actions # 100,
+        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device) # 限制范围
         # step physics and render each frame
-        self.render()
-        for _ in range(self.cfg.control.decimation):
-            self.torques = self._compute_torques(self.actions).view(self.torques.shape)
-            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
-            self.gym.simulate(self.sim)
-            if self.cfg.env.test:
-                elapsed_time = self.gym.get_elapsed_time(self.sim)
-                sim_time = self.gym.get_sim_time(self.sim)
-                if sim_time-elapsed_time>0:
+        self.render() # 可视化渲染
+        for _ in range(self.cfg.control.decimation): # 4
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape) # 计算机器人的关节转矩
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques)) # 设置每个关节自由度的转矩
+            self.gym.simulate(self.sim) # 仿真
+            if self.cfg.env.test: # 测试模式
+                elapsed_time = self.gym.get_elapsed_time(self.sim) # 从仿真开始以来经过的时间
+                sim_time = self.gym.get_sim_time(self.sim) # 获取仿真时间
+                if sim_time-elapsed_time>0: # 时间对齐
                     time.sleep(sim_time-elapsed_time)
             
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
-            self.gym.refresh_dof_state_tensor(self.sim)
+            self.gym.refresh_dof_state_tensor(self.sim) # 更新dof数据
         self.post_physics_step()
 
         # return clipped obs, clipped states (None), rewards, dones and infos
@@ -79,11 +80,11 @@ class LeggedRobot(BaseTask):
             self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
-    def post_physics_step(self):
+    def post_physics_step(self): # 检查终止条件，计算观察值和奖励，执行常见的回调计算
         """ check terminations, compute observations and rewards
             calls self._post_physics_step_callback() for common computations 
             calls self._draw_debug_vis() if needed
-        """
+        """ # root_state: position([0:3]), rotation([3:7]), linear velocity([7:10]), and angular velocity([10:13])
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
@@ -93,8 +94,8 @@ class LeggedRobot(BaseTask):
         # prepare quantities
         self.base_pos[:] = self.root_states[:, 0:3]
         self.base_quat[:] = self.root_states[:, 3:7]
-        self.rpy[:] = get_euler_xyz_in_tensor(self.base_quat[:])
-        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.rpy[:] = get_euler_xyz_in_tensor(self.base_quat[:]) # 计算欧拉角
+        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10]) # 坐标系转换
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
 
@@ -119,7 +120,7 @@ class LeggedRobot(BaseTask):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
-        self.reset_buf |= torch.logical_or(torch.abs(self.rpy[:,1])>1.0, torch.abs(self.rpy[:,0])>0.8)
+        self.reset_buf |= torch.logical_or(torch.abs(self.rpy[:,1])>1.0, torch.abs(self.rpy[:,0])>0.8) # pitch：前后，roll：侧向
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         self.reset_buf |= self.time_out_buf
 
@@ -171,7 +172,7 @@ class LeggedRobot(BaseTask):
             rew = self.reward_functions[i]() * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
-        if self.cfg.rewards.only_positive_rewards:
+        if self.cfg.rewards.only_positive_rewards: # >0,为正
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         # add termination reward after clipping
         if "termination" in self.reward_scales:
@@ -211,7 +212,7 @@ class LeggedRobot(BaseTask):
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
     #------------- Callbacks --------------
-    def _process_rigid_shape_props(self, props, env_id):
+    def _process_rigid_shape_props(self, props, env_id): # 随机化每个环境中机器人刚体的摩擦系数
         """ Callback allowing to store/change/randomize the rigid shape properties of each environment.
             Called During environment creation.
             Base behavior: randomizes the friction of each environment
@@ -226,11 +227,11 @@ class LeggedRobot(BaseTask):
         if self.cfg.domain_rand.randomize_friction:
             if env_id==0:
                 # prepare friction randomization
-                friction_range = self.cfg.domain_rand.friction_range
-                num_buckets = 64
-                bucket_ids = torch.randint(0, num_buckets, (self.num_envs, 1))
-                friction_buckets = torch_rand_float(friction_range[0], friction_range[1], (num_buckets,1), device='cpu')
-                self.friction_coeffs = friction_buckets[bucket_ids]
+                friction_range = self.cfg.domain_rand.friction_range #  # 获取摩擦系数范围
+                num_buckets = 64 # 设置桶的数量，表示有64种可能的摩擦系数
+                bucket_ids = torch.randint(0, num_buckets, (self.num_envs, 1)) # # 随机生成桶的ID
+                friction_buckets = torch_rand_float(friction_range[0], friction_range[1], (num_buckets,1), device='cpu') # 在摩擦系数的范围内生成随机摩擦系数
+                self.friction_coeffs = friction_buckets[bucket_ids]# 根据桶ID选择摩擦系数
 
             for s in range(len(props)):
                 props[s].friction = self.friction_coeffs[env_id]
@@ -248,7 +249,7 @@ class LeggedRobot(BaseTask):
         Returns:
             [numpy.array]: Modified DOF properties
         """
-        if env_id==0:
+        if env_id==0: # 存储了每个DOF的硬限制（位置、速度、力矩）并计算了软限制。软限制的目的是让机器人在接近硬限制时更容易平稳过渡，从而提高控制的稳定性和鲁棒性。
             self.dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False)
             self.dof_vel_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
             self.torque_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
@@ -264,7 +265,7 @@ class LeggedRobot(BaseTask):
                 self.dof_pos_limits[i, 1] = m + 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
         return props
 
-    def _process_rigid_body_props(self, props, env_id):
+    def _process_rigid_body_props(self, props, env_id): # 随机改变机器人的基础质量，以增加仿真中的多样性和随机性
         # if env_id==0:
         #     sum = 0
         #     for i, p in enumerate(props):
@@ -281,10 +282,10 @@ class LeggedRobot(BaseTask):
         """ Callback called before computing terminations, rewards, and observations
             Default behaviour: Compute ang vel command based on target and heading, compute measured terrain heights and randomly push robots
         """
-        # 
+        # 随机采样 增强鲁棒性 command ，default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
-        if self.cfg.commands.heading_command:
+        if self.cfg.commands.heading_command: # 更新航向
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
             self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
@@ -319,15 +320,15 @@ class LeggedRobot(BaseTask):
         #pd controller
         actions_scaled = actions * self.cfg.control.action_scale
         control_type = self.cfg.control.control_type
-        if control_type=="P":
+        if control_type=="P": # 位置控制
             torques = self.p_gains*(actions_scaled + self.default_dof_pos - self.dof_pos) - self.d_gains*self.dof_vel
-        elif control_type=="V":
+        elif control_type=="V": # 速度控制
             torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
-        elif control_type=="T":
+        elif control_type=="T": # 转矩控制
             torques = actions_scaled
         else:
             raise NameError(f"Unknown controller type: {control_type}")
-        return torch.clip(torques, -self.torque_limits, self.torque_limits)
+        return torch.clip(torques, -self.torque_limits, self.torque_limits) # 确保转矩不会超出物理系统的能力范围，
 
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments
@@ -379,7 +380,7 @@ class LeggedRobot(BaseTask):
         env_ids_int32 = push_env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                    gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                                                    gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32)) # 指定其环境 ID
 
    
     
@@ -423,34 +424,34 @@ class LeggedRobot(BaseTask):
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
-        # get gym GPU state tensors
-        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
-        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
-        net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)
-        self.gym.refresh_dof_state_tensor(self.sim)
+        # get gym GPU state tensors # # position([0:3]), rotation([3:7]), linear velocity([7:10]), and angular velocity([10:13])
+        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim) # 初始化变量
+        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim) # pos,vel -> (num_dofs, 2).
+        net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim) # 接触力张量 (num_rigid_bodies, 3)
+        self.gym.refresh_dof_state_tensor(self.sim) # 更新数据
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        self.root_states = gymtorch.wrap_tensor(actor_root_state) # -> tensor
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
         self.base_quat = self.root_states[:, 3:7]
-        self.rpy = get_euler_xyz_in_tensor(self.base_quat)
+        self.rpy = get_euler_xyz_in_tensor(self.base_quat) # 将四元数转为欧拉角
         self.base_pos = self.root_states[:self.num_envs, 0:3]
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
         # initialize some data used later on
         self.common_step_counter = 0
         self.extras = {}
-        self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
-        self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
-        self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
-        self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
-        self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
-        self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
-        self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.noise_scale_vec = self._get_noise_scale_vec(self.cfg) # 计算噪声尺度向量
+        self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1)) # 初始化重力向量
+        self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1)) # 初始化朝向向量
+        self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # 力矩
+        self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # p增益
+        self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # d增益
+        self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # 初始化输出动作
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
@@ -458,22 +459,22 @@ class LeggedRobot(BaseTask):
         self.commands_scale = torch.tensor([self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel], device=self.device, requires_grad=False,) # TODO change this
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
         self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
-        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10]) # 坐标系转换，world->base
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
       
 
         # joint positions offsets and PD gains
-        self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False) # 初始化关节默认姿态
         for i in range(self.num_dofs):
             name = self.dof_names[i]
-            angle = self.cfg.init_state.default_joint_angles[name]
+            angle = self.cfg.init_state.default_joint_angles[name] # 更新初始化姿态
             self.default_dof_pos[i] = angle
             found = False
             for dof_name in self.cfg.control.stiffness.keys():
                 if dof_name in name:
-                    self.p_gains[i] = self.cfg.control.stiffness[dof_name]
-                    self.d_gains[i] = self.cfg.control.damping[dof_name]
+                    self.p_gains[i] = self.cfg.control.stiffness[dof_name] # 刚度系数
+                    self.d_gains[i] = self.cfg.control.damping[dof_name] # 阻尼系数
                     found = True
             if not found:
                 self.p_gains[i] = 0.
@@ -503,18 +504,18 @@ class LeggedRobot(BaseTask):
             name = '_reward_' + name
             self.reward_functions.append(getattr(self, name))
 
-        # reward episode sums
+        # reward episode sums # 初始化，记录每个环境下该reward的值；
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
 
-    def _create_ground_plane(self):
+    def _create_ground_plane(self): # 构建仿真环境的基础物理地面
         """ Adds a ground plane to the simulation, sets friction and restitution based on the cfg.
         """
         plane_params = gymapi.PlaneParams()
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
-        plane_params.static_friction = self.cfg.terrain.static_friction
-        plane_params.dynamic_friction = self.cfg.terrain.dynamic_friction
-        plane_params.restitution = self.cfg.terrain.restitution
+        plane_params.static_friction = self.cfg.terrain.static_friction # 静摩擦
+        plane_params.dynamic_friction = self.cfg.terrain.dynamic_friction # 动摩擦
+        plane_params.restitution = self.cfg.terrain.restitution #  反弹
         self.gym.add_ground(self.sim, plane_params)
 
     def _create_envs(self):
@@ -529,26 +530,26 @@ class LeggedRobot(BaseTask):
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
         asset_root = os.path.dirname(asset_path)
         asset_file = os.path.basename(asset_path)
-
-        asset_options = gymapi.AssetOptions()
-        asset_options.default_dof_drive_mode = self.cfg.asset.default_dof_drive_mode
-        asset_options.collapse_fixed_joints = self.cfg.asset.collapse_fixed_joints
-        asset_options.replace_cylinder_with_capsule = self.cfg.asset.replace_cylinder_with_capsule
-        asset_options.flip_visual_attachments = self.cfg.asset.flip_visual_attachments
-        asset_options.fix_base_link = self.cfg.asset.fix_base_link
-        asset_options.density = self.cfg.asset.density
-        asset_options.angular_damping = self.cfg.asset.angular_damping
+        # 配置其物理属性
+        asset_options = gymapi.AssetOptions() # 用于机器人相关的各种设置，参数在config中；
+        asset_options.default_dof_drive_mode = self.cfg.asset.default_dof_drive_mode # 驱动方式：位置，力矩，速度等；
+        asset_options.collapse_fixed_joints = self.cfg.asset.collapse_fixed_joints # 将连接在固定关节上的物体合并为一个整体
+        asset_options.replace_cylinder_with_capsule = self.cfg.asset.replace_cylinder_with_capsule # 简化碰撞模型
+        asset_options.flip_visual_attachments = self.cfg.asset.flip_visual_attachments # 否翻转视觉附件
+        asset_options.fix_base_link = self.cfg.asset.fix_base_link # 将基座（如躯干）固定在空间中，不可移动 仿真一般设为False
+        asset_options.density = self.cfg.asset.density #
+        asset_options.angular_damping = self.cfg.asset.angular_damping # 设置关节旋转和平移的阻尼系数
         asset_options.linear_damping = self.cfg.asset.linear_damping
-        asset_options.max_angular_velocity = self.cfg.asset.max_angular_velocity
+        asset_options.max_angular_velocity = self.cfg.asset.max_angular_velocity # 限制关节或连杆的最大角速度和线速度
         asset_options.max_linear_velocity = self.cfg.asset.max_linear_velocity
-        asset_options.armature = self.cfg.asset.armature
-        asset_options.thickness = self.cfg.asset.thickness
-        asset_options.disable_gravity = self.cfg.asset.disable_gravity
-
+        asset_options.armature = self.cfg.asset.armature # 为关节添加虚拟惯性（模拟电机转子惯性）。
+        asset_options.thickness = self.cfg.asset.thickness # 定义碰撞几何体的“厚度”（如用于胶囊体半径）
+        asset_options.disable_gravity = self.cfg.asset.disable_gravity # 禁用重力（仅用于特殊场景）
+        # 加载urdf
         robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
+        self.num_dof = self.gym.get_asset_dof_count(robot_asset) #
         self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
-        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
+        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset) # 属性
         rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
 
         # save body names from the asset
@@ -578,10 +579,10 @@ class LeggedRobot(BaseTask):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
             pos = self.env_origins[i].clone()
-            pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
+            pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)  # # 模拟不同地形起始点,
             start_pose.p = gymapi.Vec3(*pos)
                 
-            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
+            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i) # 不同环境设置不同摩擦系数（模拟多样化地面）
             self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
             actor_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, i, self.cfg.asset.self_collisions, 0)
             dof_props = self._process_dof_props(dof_props_asset, i)
@@ -591,15 +592,15 @@ class LeggedRobot(BaseTask):
             self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
             self.actor_handles.append(actor_handle)
-
+        # 获取足部刚体在物理引擎中的索引
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
-
+        #
         self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(penalized_contact_names)):
             self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], penalized_contact_names[i])
-
+        # 碰撞终止
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
@@ -621,13 +622,13 @@ class LeggedRobot(BaseTask):
         self.env_origins[:, 2] = 0.
 
     def _parse_cfg(self, cfg):
-        self.dt = self.cfg.control.decimation * self.sim_params.dt
-        self.obs_scales = self.cfg.normalization.obs_scales
-        self.reward_scales = class_to_dict(self.cfg.rewards.scales)
-        self.command_ranges = class_to_dict(self.cfg.commands.ranges)
+        self.dt = self.cfg.control.decimation * self.sim_params.dt # 控制时间步长 = 控制解算的下采样因子 * 仿真时间步长 =  4 * 0.005 = 0.02
+        self.obs_scales = self.cfg.normalization.obs_scales # 获取观察值的标准化系数
+        self.reward_scales = class_to_dict(self.cfg.rewards.scales) # 奖励函数的缩放系数转为字典形式
+        self.command_ranges = class_to_dict(self.cfg.commands.ranges)#  控制命令的范围转为字典形式
      
 
-        self.max_episode_length_s = self.cfg.env.episode_length_s
+        self.max_episode_length_s = self.cfg.env.episode_length_s #
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
 
         self.cfg.domain_rand.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
@@ -635,28 +636,28 @@ class LeggedRobot(BaseTask):
 
     #------------ reward functions----------------
     def _reward_lin_vel_z(self):
-        # Penalize z axis base linear velocity
+        # Penalize z axis base linear velocity # 防止z方向有较大的速度
         return torch.square(self.base_lin_vel[:, 2])
     
     def _reward_ang_vel_xy(self):
-        # Penalize xy axes base angular velocity
+        # Penalize xy axes base angular velocity # 防止机器人在水平方向上产生剧烈的旋转，保持更稳定的行走或运动姿势
         return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
     
     def _reward_orientation(self):
-        # Penalize non flat base orientation
+        # Penalize non flat base orientation # 取重力方向xy方向，关注机器人在行走过程中是否保持水平姿态
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
 
     def _reward_base_height(self):
-        # Penalize base height away from target
+        # Penalize base height away from target #保持一个接近目标高度的状态
         base_height = self.root_states[:, 2]
         return torch.square(base_height - self.cfg.rewards.base_height_target)
     
     def _reward_torques(self):
-        # Penalize torques
+        # Penalize torques # 惩罚扭矩的目的是促使机器人以较小的扭矩执行任务，避免过大扭矩带来的损耗
         return torch.sum(torch.square(self.torques), dim=1)
 
     def _reward_dof_vel(self):
-        # Penalize dof velocities
+        # Penalize dof velocities #
         return torch.sum(torch.square(self.dof_vel), dim=1)
     
     def _reward_dof_acc(self):
@@ -664,18 +665,18 @@ class LeggedRobot(BaseTask):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
     
     def _reward_action_rate(self):
-        # Penalize changes in actions
+        # Penalize changes in actions # 鼓励机器人保持动作的连续性和稳定性,而不是突然进行剧烈的变化
         return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
     
-    def _reward_collision(self):
-        # Penalize collisions on selected bodies
+    def _reward_collision(self): # 惩罚机器人与特定部件发生碰撞
+        # Penalize collisions on selected bodies # ["hip", "knee"]
         return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
     
     def _reward_termination(self):
-        # Terminal reward / penalty
+        # Terminal reward / penalty # 任务结束且没超时则奖励，否则不给奖励
         return self.reset_buf * ~self.time_out_buf
     
-    def _reward_dof_pos_limits(self):
+    def _reward_dof_pos_limits(self): # 惩罚关节位置接近其物理限制的情况
         # Penalize dof positions too close to the limit
         out_of_limits = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.) # lower limit
         out_of_limits += (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.)
@@ -690,7 +691,7 @@ class LeggedRobot(BaseTask):
         # penalize torques too close to the limit
         return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
 
-    def _reward_tracking_lin_vel(self):
+    def _reward_tracking_lin_vel(self): # tracking_sigma 调节容忍度，较大则较为宽泛，较小则严苛
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
@@ -701,27 +702,27 @@ class LeggedRobot(BaseTask):
         return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
 
     def _reward_feet_air_time(self):
-        # Reward long steps
+        # Reward long steps# PhysX 引擎的不准确，需要添加contact_filt
         # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
-        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1. # 接触地
         contact_filt = torch.logical_or(contact, self.last_contacts) 
         self.last_contacts = contact
         first_contact = (self.feet_air_time > 0.) * contact_filt
-        self.feet_air_time += self.dt
+        self.feet_air_time += self.dt # 0.5 threshold
         rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) # reward only on first contact with the ground
-        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
-        self.feet_air_time *= ~contact_filt
+        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command # 确保只有在机器人有实际移动命令时才给予奖励
+        self.feet_air_time *= ~contact_filt # 清零
         return rew_airTime
     
     def _reward_stumble(self):
-        # Penalize feet hitting vertical surfaces
+        # Penalize feet hitting vertical surfaces # 惩罚机器人脚部与垂直表面发生碰撞的情况
         return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) >\
              5 *torch.abs(self.contact_forces[:, self.feet_indices, 2]), dim=1)
         
     def _reward_stand_still(self):
-        # Penalize motion at zero commands
+        # Penalize motion at zero commands # 速度为0时，应该保持出事姿态，惩罚机器人在没有运动命令时仍然发生运动
         return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
 
     def _reward_feet_contact_forces(self):
-        # penalize high contact forces
+        # penalize high contact forces # 惩罚较大的地接触力
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)

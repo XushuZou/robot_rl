@@ -1,11 +1,23 @@
 import inspect
 
+'''
+# 这段代码的目的是在创建一个配置对象时，自动实例化它的所有嵌套类。
+# 这样你就不需要手动实例化每个嵌套类，特别适用于配置结构较为复杂、
+# 层级较深的情况。通过这种方式，你的代码变得更加简洁，管理起来也更方便。
+class SomeConfig(BaseConfig):
+    class SubConfig:
+        def __init__(self):
+            self.value = 42
+
+config = SomeConfig()
+print(config.SubConfig.value)  # 输出 42
+'''
 class BaseConfig:
     def __init__(self) -> None:
         """ Initializes all member classes recursively. Ignores all namse starting with '__' (buit-in methods)."""
         self.init_member_classes(self)
     
-    @staticmethod
+    @staticmethod # 通过递归的方式初始化类中所有成员变量的类型为类实例，简化类的构造过程
     def init_member_classes(obj):
         # iterate over all attributes names
         for key in dir(obj):

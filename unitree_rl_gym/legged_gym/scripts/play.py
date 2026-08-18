@@ -48,6 +48,6 @@ if __name__ == '__main__':
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
-    args.task = "g1"
-    args.num_envs = 10 # 4096 -- 7GB
+    args.num_envs = 10
+    args.task = "l3"
     play(args)
